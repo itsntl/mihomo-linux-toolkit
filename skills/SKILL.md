@@ -1,5 +1,5 @@
 ---
-name: mihomo-linux-toolkit-operation
+name: mihomo-linux-toolkit-skills
 description: 在 Linux 下操作已配置好的 Mihomo（Clash.Meta）代理服务，包括启停、切换节点、更新订阅、测试连通性和故障排查。
 whenToUse: 当用户需要启动、停止、重启、切换节点、更新订阅、测试或排查 Clash/Mihomo 代理时使用。
 disableModelInvocation: false
