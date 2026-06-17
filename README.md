@@ -7,7 +7,7 @@
 | 文件/目录 | 说明 |
 |---|---|
 | `setup.md` | 完整安装与配置指南（核心、订阅转换、启动方式、使用教程、常见问题） |
-| `skills/mihomo-linux-toolkit/` | Agent 技能目录，包含 `SKILL.md`，用于指导代理启停、切换节点、更新订阅和故障排查 |
+| `.opencode/skills/mihomo-linux-toolkit/` | Agent 技能目录，包含 `SKILL.md`，用于指导代理启停、切换节点、更新订阅和故障排查 |
 | `clashctl` | 统一管理脚本，支持 `on/off/restart/status/log/nodes/use/test/update/sub/edit/proxy` |
 | `mihomo-shortcuts.sh` | 统一快捷函数定义，可被 `source` 到 shell 中使用 |
 | `convert_sub.py` | 将机场 base64 订阅转换为 Mihomo 可用的 `config.yaml` |
