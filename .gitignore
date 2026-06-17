@@ -1,0 +1,44 @@
+# ============================================
+# Mihomo Linux Toolkit - Git Ignore
+# ============================================
+
+# --- Mihomo runtime / sensitive files ---
+config.yaml
+*.yaml.bak
+*.yaml.tmp
+sub_url
+*.url
+
+# --- Mihomo binary / core files ---
+mihomo
+clash.meta
+*.gz
+*.zip
+*.tar
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+
+# --- Shell / logs ---
+*.log
+nohup.out
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# --- OS files ---
+Thumbs.db
+desktop.ini

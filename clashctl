@@ -1,0 +1,278 @@
+#!/usr/bin/env bash
+# Simple mihomo manager (compatible with systemd user service and nohup)
+
+CMD="${1:-status}"
+CONFIG="$HOME/.config/mihomo/config.yaml"
+LOG="/tmp/mihomo.log"
+PID_FILE="/tmp/mihomo.pid"
+API="http://127.0.0.1:9090"
+
+has_systemd() {
+  [ -f "$HOME/.config/systemd/user/mihomo.service" ]
+}
+
+is_systemd_running() {
+  has_systemd && systemctl --user is-active mihomo.service &>/dev/null
+}
+
+is_nohup_running() {
+  [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+}
+
+is_running() {
+  is_systemd_running || is_nohup_running
+}
+
+start_mihomo() {
+  if is_systemd_running; then
+    echo "mihomo is already running (systemd)"
+    return
+  fi
+  if is_nohup_running; then
+    echo "mihomo is already running (PID: $(cat "$PID_FILE"))"
+    return
+  fi
+
+  if has_systemd; then
+    systemctl --user start mihomo.service
+    echo "mihomo started (systemd)"
+  else
+    nohup mihomo -f "$CONFIG" > "$LOG" 2>&1 &
+    echo $! > "$PID_FILE"
+    echo "mihomo started (PID: $!)"
+  fi
+}
+
+stop_mihomo() {
+  if is_systemd_running; then
+    systemctl --user stop mihomo.service
+    echo "mihomo stopped (systemd)"
+    return
+  fi
+
+  if [ -f "$PID_FILE" ]; then
+    PID=$(cat "$PID_FILE")
+    if kill -0 "$PID" 2>/dev/null; then
+      kill "$PID"
+      rm -f "$PID_FILE"
+      echo "mihomo stopped (PID: $PID)"
+      return
+    else
+      rm -f "$PID_FILE"
+    fi
+  fi
+
+  if pgrep -x mihomo &>/dev/null; then
+    pkill -x mihomo
+    echo "mihomo stopped (pkill)"
+  else
+    echo "mihomo is not running"
+  fi
+}
+
+restart_mihomo() {
+  stop_mihomo
+  sleep 1
+  start_mihomo
+}
+
+check_api() {
+  if ! curl -s --max-time 2 "$API/proxies/PROXY" &>/dev/null; then
+    echo "mihomo API is unreachable ($API), please start mihomo first"
+    return 1
+  fi
+}
+
+case "$CMD" in
+  on|start)
+    start_mihomo
+    ;;
+  off|stop)
+    stop_mihomo
+    ;;
+  restart|re)
+    restart_mihomo
+    ;;
+  status|st)
+    if is_systemd_running; then
+      systemctl --user status mihomo.service --no-pager
+    elif is_nohup_running; then
+      echo "mihomo is running (PID: $(cat "$PID_FILE"), nohup mode)"
+      echo "--- last 10 log lines ---"
+      tail -n 10 "$LOG" 2>/dev/null || echo "no logs yet"
+    else
+      echo "mihomo is not running"
+      if [ -f "$LOG" ]; then
+        echo "--- last 10 log lines ---"
+        tail -n 10 "$LOG" 2>/dev/null
+      fi
+    fi
+    ;;
+  log)
+    if is_systemd_running; then
+      journalctl --user -u mihomo.service -f
+    else
+      tail -f "$LOG"
+    fi
+    ;;
+  nodes|list|ls)
+    check_api || exit 1
+    curl -s --max-time 5 "$API/proxies/PROXY" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+now = d.get('now', 'N/A')
+print(f'Current node: {now}')
+print('---')
+for i, name in enumerate(d.get('all', []), 1):
+    if name == 'DIRECT':
+        continue
+    mark = '  <--' if name == now else ''
+    print(f'{i:3d}. {name}{mark}')
+"
+    ;;
+  switch|use)
+    node_name="$2"
+    if [ -z "$node_name" ]; then
+      echo "Usage: clashctl switch <node name or index>"
+      echo "       clashctl use 3          # switch to the 3rd node"
+      exit 1
+    fi
+    check_api || exit 1
+
+    if echo "$node_name" | grep -qE '^[0-9]+$'; then
+      idx=$node_name
+      node_name=$(curl -s --max-time 5 "$API/proxies/PROXY" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+all_nodes = [n for n in d.get('all', []) if n != 'DIRECT']
+idx = int(sys.argv[1]) - 1
+if 0 <= idx < len(all_nodes):
+    print(all_nodes[idx])
+" "$idx")
+      if [ -z "$node_name" ]; then
+        echo "Invalid node index: $idx"
+        exit 1
+      fi
+    fi
+
+    result=$(curl -s --max-time 5 -X PUT "$API/proxies/PROXY" \
+      -H 'Content-Type: application/json' \
+      -d "{\"name\":\"$node_name\"}")
+    echo "Switched to: $node_name"
+    ;;
+  ui)
+    echo "Web UI:   http://127.0.0.1:9090/ui"
+    echo "API:      http://127.0.0.1:9090"
+    if grep -q '^secret:' "$CONFIG" 2>/dev/null; then
+      echo "Secret:   $(grep '^secret:' "$CONFIG" | awk '{print $2}' | tr -d '\"')"
+    fi
+    ;;
+  proxy|env)
+    export http_proxy="http://127.0.0.1:7890"
+    export https_proxy="http://127.0.0.1:7890"
+    export all_proxy="socks5://127.0.0.1:7890"
+    echo "Proxy environment variables set for current terminal"
+    echo "  http_proxy  = http://127.0.0.1:7890"
+    echo "  https_proxy = http://127.0.0.1:7890"
+    echo "  all_proxy   = socks5://127.0.0.1:7890"
+    ;;
+  test)
+    echo "Testing proxy connectivity..."
+    if curl -x http://127.0.0.1:7890 -s --max-time 10 -I https://www.google.com | head -1; then
+      echo "Proxy is working"
+    else
+      echo "Proxy test failed"
+    fi
+    ;;
+  update)
+    SUB_URL_FILE="$HOME/.config/mihomo/sub_url"
+    CONVERT_SCRIPT="$HOME/.config/mihomo/convert_sub.py"
+
+    if [ -f "$CONVERT_SCRIPT" ]; then
+      echo "Running converter $CONVERT_SCRIPT ..."
+      if python3 "$CONVERT_SCRIPT"; then
+        restart_mihomo
+        echo "Subscription updated and mihomo restarted"
+      else
+        echo "Converter script failed"
+        exit 1
+      fi
+      exit 0
+    elif [ -f "$SUB_URL_FILE" ]; then
+      SUB_URL=$(cat "$SUB_URL_FILE")
+      echo "Using existing subscription URL: $SUB_URL"
+    else
+      echo "No subscription source available"
+      echo "  - Put convert_sub.py in ~/.config/mihomo/"
+      echo "  - Or set a subscription URL first with: clashctl sub <url>"
+      exit 1
+    fi
+
+    echo "Downloading subscription to /tmp/sub.yaml ..."
+    if curl -sL --max-time 30 -o /tmp/sub.yaml "$SUB_URL"; then
+      cp /tmp/sub.yaml "$CONFIG"
+      restart_mihomo
+      echo "Subscription updated and mihomo restarted"
+    else
+      echo "Subscription download failed"
+      exit 1
+    fi
+    ;;
+  sub)
+    SUB_URL_FILE="$HOME/.config/mihomo/sub_url"
+
+    if [ -z "$2" ]; then
+      if [ -f "$SUB_URL_FILE" ]; then
+        echo "Current subscription URL: $(cat "$SUB_URL_FILE")"
+      else
+        echo "No subscription URL set"
+        echo "Usage: clashctl sub <subscription URL>"
+      fi
+      exit 0
+    fi
+
+    SUB_URL="$2"
+    echo "Saving subscription URL: $SUB_URL"
+    echo "$SUB_URL" > "$SUB_URL_FILE"
+
+    echo "Downloading subscription to /tmp/sub.yaml ..."
+    if curl -sL --max-time 30 -o /tmp/sub.yaml "$SUB_URL"; then
+      cp /tmp/sub.yaml "$CONFIG"
+      restart_mihomo
+      echo "Subscription updated and mihomo restarted"
+    else
+      echo "Subscription download failed"
+      exit 1
+    fi
+    ;;
+  edit)
+    ${EDITOR:-nano} "$CONFIG"
+    ;;
+  *)
+    cat <<EOF
+Usage: clashctl <command>
+
+Common:
+  on/start            Start mihomo
+  off/stop            Stop mihomo
+  restart/re          Restart mihomo
+  status/st           Show status
+  log                 Show live logs
+
+Nodes:
+  nodes/list/ls       List all nodes (with index)
+  switch/use <name>   Switch node (supports name or index)
+
+Other:
+  ui                  Show Web UI / API addresses
+  proxy/env           Set proxy environment variables for current terminal
+  test                Test proxy connectivity
+  update              Update existing subscription (prefer ~/.config/mihomo/convert_sub.py, else re-download saved URL)
+  sub [url]           Show or set subscription URL (auto-downloads after set)
+  edit                Edit configuration file
+
+Proxy port:  127.0.0.1:7890 (HTTP/SOCKS5)
+Web UI port: 127.0.0.1:9090
+EOF
+    ;;
+esac
